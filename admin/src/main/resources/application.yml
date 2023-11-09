@@ -1,2 +1,18 @@
 server:
   port: 8002
+#  持久层配置文件
+spring:
+  datasource:
+    username: root
+    password: root
+    url: jdbc:mysql://127.0.0.1:3306/shortlink?characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&serverTimezone=GMT%2B8
+    # driver的作用
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 连接池
+    # 兼容性比德鲁伊要好一些
+    hikari:
+      connection-test-query: select 1
+      connection-timeout: 20000
+      idle-timeout: 300000
+      maximum-pool-size: 5
+      minimum-idle: 5

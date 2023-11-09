@@ -30,6 +30,15 @@
         <guava.version>30.0-jre</guava.version>
     </properties>
 
+<!--    dependencies 定义默认会下载依赖 并把传递到子项目中-->
+<!--    dependencyManagement 不会下载依赖只会去规约版本 只有在子类中引入依赖 才会去下载-->
+    <dependencies>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+    </dependencies>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -103,6 +112,9 @@
                 <artifactId>guava</artifactId>
                 <version>${guava.version}</version>
             </dependency>
+
+
+
         </dependencies>
     </dependencyManagement>
 
