@@ -5,6 +5,7 @@ import org.redisson.api.RedissonClient;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
 
 /**
  * 布隆过滤器配置
@@ -22,7 +23,7 @@ public class RBloomFilterConfiguration {
         // 初始化布隆过滤器
         // expectedInsertions：预估布隆过滤器存储的元素长度。
         // falseProbability：运行的误判率。
-        cachePenetrationBloomFilter.tryInit(0, 0);
+        cachePenetrationBloomFilter.tryInit(10000000, 0.001);
         return cachePenetrationBloomFilter;
     }
 }
