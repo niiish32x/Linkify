@@ -17,7 +17,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController // 相当于是 restbody 以及 controller 两个接口的一个结合
 @RequiredArgsConstructor // 使用构造器的方式进行注入
 public class UserController {
-
     public final UserService userService;
 
 
@@ -27,15 +26,21 @@ public class UserController {
      * @param username
      * @return
      */
-    @GetMapping("/api/linkservice/v1/user/{username}")
+    @GetMapping("/api/short-link/admin/v1/user/{username}")
     public Result<UserRespDTO> getUserByUsername(@PathVariable("username") String username){
-        UserRespDTO result = userService.getUserByUsername(username);
-        if (result == null){
-            return new Result<UserRespDTO>().setCode(UserErrorCodeEnum.USER_NULL.code()).setMessage(UserErrorCodeEnum.USER_NULL.message());
-        }else {
-            return Results.success(result);
-        }
+        return Results.success(userService.getUserByUsername(username));
     }
+
+    /**
+     * 查询用户名是否存在
+     * @param username
+     * @return
+     */
+    @GetMapping("/api/short-link/admin/v1/user/has-username")
+    public Result<Boolean> hasUsername(@PathVariable("username") String username){
+        return Results.success(userService.hasUsername(username));
+    }
+
 }
 
 
