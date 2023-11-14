@@ -6,6 +6,8 @@ import com.nageoffer.shortlink.admin.dto.req.UserRegisterReqDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 /**
  * 用户接口层
  */
@@ -30,4 +32,6 @@ public interface UserService extends IService<UserDO> {
      * @param requestParam 注册用户请求参数
      */
     void register(UserRegisterReqDTO requestParam);
+
+    List <UserRespDTO> getAllUser();
 }

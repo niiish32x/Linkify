@@ -2,12 +2,10 @@ package com.nageoffer.shortlink.admin.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.toolkit.BeanUtils;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.nageoffer.shortlink.admin.common.convention.exception.ClientException;
 import com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum;
-import com.nageoffer.shortlink.admin.config.RBloomFilterConfiguration;
 import com.nageoffer.shortlink.admin.dao.entity.UserDO;
 import com.nageoffer.shortlink.admin.dao.mapper.UserMapper;
 import com.nageoffer.shortlink.admin.dto.req.UserRegisterReqDTO;
@@ -15,11 +13,14 @@ import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
 import com.nageoffer.shortlink.admin.service.UserService;
 //import org.springframework.beans.BeanUtils;
 import lombok.RequiredArgsConstructor;
-import net.bytebuddy.agent.builder.AgentBuilder;
+import net.bytebuddy.NamingStrategy;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.nageoffer.shortlink.admin.common.constant.RedisCacheConstant.LOCK_USER_REGISTER_KEY;
 import static com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum.USER_NAME_EXIST;
@@ -88,6 +89,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
 
 
+    }
+
+    @Override
+    public List<UserRespDTO> getAllUser() {
+        List<UserDO> userRespDTOS = baseMapper.selectList(null);
+        List<UserRespDTO> results = new ArrayList<>();
+        for (UserDO userDO : userRespDTOS){
+            UserRespDTO result = new UserRespDTO();
+            BeanUtil.copyProperties(userDO,result);
+            results.add(result);
+        }
+        return results;
     }
 
 }
