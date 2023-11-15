@@ -55,17 +55,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public Boolean hasUsername(String username) {
-        // 直接使用布隆过滤器 判断用户名是否村子啊
+        // 直接使用布隆过滤器 判断用户名是否存在啊
         return userRegisterCachePenetrationBloomFilter.contains(username);
     }
 
     @Override
     public void register(UserRegisterReqDTO requestParam) {
-        // 没有返回 false
-        // !hasUsername 表示用户名已经存在 不能再注册相同用户名 所以抛出异常
-        if (!hasUsername(requestParam.getUsername())){
+        // 存在返回true
+        // 表示用户名已经存在 不能再注册相同用户名 所以抛出异常
+        if (hasUsername(requestParam.getUsername())){
+            System.out.println("enter");
             throw new ClientException(USER_NAME_EXIST);
         }
+
+
 
         // 如果不加 username 就成全局锁了
         RLock lock = redissonClient.getLock(LOCK_USER_REGISTER_KEY + requestParam.getUsername());
@@ -87,8 +90,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             lock.unlock();
         }
 
-
-
     }
 
     @Override
@@ -102,6 +103,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
         return results;
     }
+
 
 }
 
