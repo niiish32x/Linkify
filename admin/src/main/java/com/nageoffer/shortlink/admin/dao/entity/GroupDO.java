@@ -1,14 +1,21 @@
 package com.nageoffer.shortlink.admin.dao.entity;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.*;
+import com.nageoffer.shortlink.admin.common.database.BaseDO;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.Date;
 
 @Data
-public class GroupDO implements Serializable {
+@Builder
+@NoArgsConstructor // 无参构造
+@AllArgsConstructor // 带参构造
+@TableName("t_group")
+public class GroupDO extends BaseDO implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
@@ -38,20 +45,4 @@ public class GroupDO implements Serializable {
      */
     private Integer sortOrder;
 
-    /**
-     * 创建时间
-     */
-    private Date createTime;
-
-    /**
-     * 修改时间
-     */
-    private Date updateTime;
-
-    /**
-     * 删除标识 0：未删除 1：已删除
-     */
-    private Integer delFlag;
-
-    public GroupDO() {}
 }
