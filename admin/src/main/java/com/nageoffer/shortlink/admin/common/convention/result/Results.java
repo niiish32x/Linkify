@@ -1,6 +1,7 @@
 package com.nageoffer.shortlink.admin.common.convention.result;
 
 import com.nageoffer.shortlink.admin.common.convention.errorcode.BaseErrorCode;
+import com.nageoffer.shortlink.admin.common.convention.errorcode.IErrorCode;
 import com.nageoffer.shortlink.admin.common.convention.exception.AbstractException;
 
 import java.util.Optional;
@@ -56,5 +57,11 @@ public final class Results {
         return new Result<Void>()
                 .setCode(errorCode)
                 .setMessage(errorMessage);
+    }
+
+    public static Result<Void> failure(IErrorCode errorCode) {
+        return new Result<Void>()
+                .setCode(errorCode.code())
+                .setMessage(errorCode.message());
     }
 }
