@@ -27,13 +27,15 @@ public class UserController {
 
 
     // 相当于 RequestMapping 默认值是get
+
     /**
      * 根据用户名查询用户信息
+     *
      * @param username
      * @return
      */
     @GetMapping("/api/short-link/admin/v1/user/{username}")
-    public Result<UserRespDTO> getUserByUsername(@PathVariable("username") String username){
+    public Result<UserRespDTO> getUserByUsername(@PathVariable("username") String username) {
         UserRespDTO result = userService.getUserByUsername(username);
 
         return Results.success(result);
@@ -43,21 +45,23 @@ public class UserController {
 
     /**
      * 查询用户名是否存在
+     *
      * @param username
      * @return
      */
     @GetMapping("/api/short-link/admin/v1/user/has-username")
-    public Result<Boolean> hasUsername(@RequestParam("username") String username){
+    public Result<Boolean> hasUsername(@RequestParam("username") String username) {
         return Results.success(userService.hasUsername(username));
     }
 
     /**
      * 注册用户
+     *
      * @param requestParam
      * @return
      */
     @PostMapping("api/short-link/admin/v1/user")
-    public Result<Void> register(@RequestBody UserRegisterReqDTO requestParam){
+    public Result<Void> register(@RequestBody UserRegisterReqDTO requestParam) {
         userService.register(requestParam);
         return Results.success();
     }
@@ -65,45 +69,59 @@ public class UserController {
 
     /**
      * 修改用户
+     *
      * @param requestParam
      * @return
      */
     @PutMapping("/api/short-link/admin/v1/user")
-    public Result<Void> update(@RequestBody UserUpdateReqDTO requestParam){
+    public Result<Void> update(@RequestBody UserUpdateReqDTO requestParam) {
         userService.update(requestParam);
         return Results.success();
     }
 
     /**
      * 查找所有用户主要用于调试
+     *
      * @return
      */
     @GetMapping("/api/short-link/admin/v1/getAllUser")
-    public Result<List<UserRespDTO>> getAllUser(){
+    public Result<List<UserRespDTO>> getAllUser() {
         return Results.success(userService.getAllUser());
     }
 
 
     /**
      * 用户登录
+     *
      * @param requestParam
      * @return
      */
     @PostMapping("/api/short-link/admin/v1/user/login")
-    public Result<UserLoginRespDTO> login(@RequestBody UserLoginReqDTO requestParam){
+    public Result<UserLoginRespDTO> login(@RequestBody UserLoginReqDTO requestParam) {
         return Results.success(userService.login(requestParam));
     }
 
     /**
      * 检查用户是否登录
+     *
      * @param token
      * @return
      */
     @GetMapping("/api/short-link/admin/v1/user/check-login")
-    public Result<Boolean> checkLogin(@RequestParam("username") String username,@RequestParam("token") String token){
-         return Results.success(userService.checkLogin(username,token));
+    public Result<Boolean> checkLogin(@RequestParam("username") String username, @RequestParam("token") String token) {
+        return Results.success(userService.checkLogin(username, token));
     }
 
+    /**
+     * 用户退出登录
+     * @param username
+     * @return
+     */
+    @DeleteMapping("/api/short-link/admin/v1/user/logout")
+    public Result<Void> logout(@RequestParam("username") String username,@RequestParam("token") String token){
+        userService.logout(username,token);
+        return Results.success();
+    }
 }
 
 
