@@ -3,12 +3,18 @@ package com.nageoffer.shortlink.admin.controller;
 import com.nageoffer.shortlink.admin.common.convention.result.Result;
 import com.nageoffer.shortlink.admin.common.convention.result.Results;
 import com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum;
+import com.nageoffer.shortlink.admin.dto.req.UserLoginReqDTO;
+import com.nageoffer.shortlink.admin.dto.req.UserRegisterReqDTO;
+import com.nageoffer.shortlink.admin.dto.req.UserUpdateReqDTO;
+import com.nageoffer.shortlink.admin.dto.resp.UserLoginRespDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
 import com.nageoffer.shortlink.admin.service.UserService;
+import jakarta.servlet.http.PushBuilder;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RestController;
+import org.redisson.api.RLock;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * 用户管理 控制层
@@ -28,7 +34,11 @@ public class UserController {
      */
     @GetMapping("/api/short-link/admin/v1/user/{username}")
     public Result<UserRespDTO> getUserByUsername(@PathVariable("username") String username){
-        return Results.success(userService.getUserByUsername(username));
+        UserRespDTO result = userService.getUserByUsername(username);
+
+        return Results.success(result);
+//        return result == null ? Results.failure(UserErrorCodeEnum.USER_EXIST) : Results.success(result);
+
     }
 
     /**
@@ -37,8 +47,61 @@ public class UserController {
      * @return
      */
     @GetMapping("/api/short-link/admin/v1/user/has-username")
-    public Result<Boolean> hasUsername(@PathVariable("username") String username){
+    public Result<Boolean> hasUsername(@RequestParam("username") String username){
         return Results.success(userService.hasUsername(username));
+    }
+
+    /**
+     * 注册用户
+     * @param requestParam
+     * @return
+     */
+    @PostMapping("api/short-link/admin/v1/user")
+    public Result<Void> register(@RequestBody UserRegisterReqDTO requestParam){
+        userService.register(requestParam);
+        return Results.success();
+    }
+
+
+    /**
+     * 修改用户
+     * @param requestParam
+     * @return
+     */
+    @PutMapping("/api/short-link/admin/v1/user")
+    public Result<Void> update(@RequestBody UserUpdateReqDTO requestParam){
+        userService.update(requestParam);
+        return Results.success();
+    }
+
+    /**
+     * 查找所有用户主要用于调试
+     * @return
+     */
+    @GetMapping("/api/short-link/admin/v1/getAllUser")
+    public Result<List<UserRespDTO>> getAllUser(){
+        return Results.success(userService.getAllUser());
+    }
+
+
+    /**
+     * 用户登录
+     * @param requestParam
+     * @return
+     */
+    @PostMapping("/api/short-link/admin/v1/user/login")
+    public Result<UserLoginRespDTO> login(@RequestBody UserLoginReqDTO requestParam){
+        return Results.success(userService.login(requestParam));
+    }
+
+    /**
+     * 检查用户是否登录
+     * @param token
+     * @return
+     */
+    @GetMapping("/api/short-link/admin/v1/user/check-login")
+    public Result<Boolean> checkLogin(@RequestParam("token") String token){
+         return Results.success(userService.checkLogin(token));
     }
 
 }
