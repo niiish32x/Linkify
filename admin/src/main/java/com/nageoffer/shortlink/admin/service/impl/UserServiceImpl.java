@@ -2,7 +2,6 @@ package com.nageoffer.shortlink.admin.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.lang.UUID;
-import cn.hutool.crypto.digest.MD5;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -20,15 +19,13 @@ import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
 import com.nageoffer.shortlink.admin.service.UserService;
 //import org.springframework.beans.BeanUtils;
 import lombok.RequiredArgsConstructor;
-import net.bytebuddy.NamingStrategy;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import static com.nageoffer.shortlink.admin.common.constant.RedisCacheConstant.LOCK_USER_REGISTER_KEY;
@@ -74,11 +71,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // 存在返回true
         // 表示用户名已经存在 不能再注册相同用户名 所以抛出异常
         if (hasUsername(requestParam.getUsername())){
-            System.out.println("enter");
             throw new ClientException(USER_NAME_EXIST);
         }
 
-        System.out.println("out");
 
         // 如果不加 username 就成全局锁了
         RLock lock = redissonClient.getLock(LOCK_USER_REGISTER_KEY + requestParam.getUsername());
@@ -139,15 +134,34 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException("用户不存在");
         }
 
+        Boolean hasLogin = stringRedisTemplate.hasKey("login_" + requestParam.getUsername());
+        if (hasLogin != null && hasLogin){
+            throw new ClientException("用户已登录");
+        }
+
+        /**
+         * Hash
+         * Key: login 用户名
+         * Value:
+         *  Key: token标识
+         *  Val: Json 字符串(用户信息)_
+         */
+
         String uuid = UUID.randomUUID().toString();
-        // 把UUID 作为key 设置30分钟的有效期
-        stringRedisTemplate.opsForValue().set(uuid, JSON.toJSONString(userDO),30L, TimeUnit.MINUTES);
+//        // 把UUID 作为key 设置30分钟的有效期
+//        stringRedisTemplate.opsForValue().set(uuid, JSON.toJSONString(userDO),30L, TimeUnit.MINUTES);
+//
+//        Map<String, Object> userInfoMap = new HashMap<>();
+//        userInfoMap.put("token",JSON.toJSONString(userDO));
+        stringRedisTemplate.opsForHash().put("login_"+ requestParam.getUsername(),uuid,JSON.toJSONString(userDO));
+        // 设置过期时间
+        stringRedisTemplate.expire("login_"+requestParam.getUsername(),30L, TimeUnit.MINUTES);
         return new UserLoginRespDTO(uuid);
     }
 
     @Override
-    public Boolean checkLogin(String token) {
-        return stringRedisTemplate.hasKey(token);
+    public Boolean checkLogin(String username, String token) {
+        return stringRedisTemplate.opsForHash().get("login_" + username,token) != null;
     }
 }
 
