@@ -14,7 +14,7 @@ import java.util.Date;
 @TableName("t_user")
 public class UserDO implements Serializable {
 
-    private static final long serialVersionUID = 1L;
+//    private static final long serialVersionUID = 1L;
 
     @TableId(type = IdType.AUTO)
     /**
@@ -61,7 +61,7 @@ public class UserDO implements Serializable {
     /**
      * 修改时间
      */
-    @TableField(fill = FieldFill.INSERT)
+    @TableField(fill = FieldFill.INSERT_UPDATE)
     private Date updateTime;
 
     /**
