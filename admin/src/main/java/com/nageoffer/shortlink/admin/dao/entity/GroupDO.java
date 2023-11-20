@@ -45,4 +45,5 @@ public class GroupDO extends BaseDO implements Serializable {
      */
     private Integer sortOrder;
 
+
 }
