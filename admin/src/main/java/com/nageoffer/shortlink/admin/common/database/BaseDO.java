@@ -3,6 +3,7 @@ package com.nageoffer.shortlink.admin.common.database;
 
 import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 import java.util.Date;
@@ -29,6 +30,6 @@ public class BaseDO {
     /**
      * 删除标识 0：未删除 1：已删除
      */
-    @TableField(fill = FieldFill.INSERT)
+    @TableField(value = "del_flag",fill = FieldFill.INSERT)
     private Integer delFlag;
 }
