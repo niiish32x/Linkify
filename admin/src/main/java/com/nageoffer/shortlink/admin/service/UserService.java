@@ -1,6 +1,7 @@
 package com.nageoffer.shortlink.admin.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.nageoffer.shortlink.admin.dao.entity.GroupDO;
 import com.nageoffer.shortlink.admin.dao.entity.UserDO;
 import com.nageoffer.shortlink.admin.dto.req.UserLoginReqDTO;
 import com.nageoffer.shortlink.admin.dto.req.UserRegisterReqDTO;
@@ -8,7 +9,6 @@ import com.nageoffer.shortlink.admin.dto.req.UserUpdateReqDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserLoginRespDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
 import org.springframework.stereotype.Component;
-import org.springframework.web.bind.annotation.RequestBody;
 
 import java.util.List;
 
@@ -67,5 +67,4 @@ public interface UserService extends IService<UserDO> {
      * @param token    用户登录 Token
      */
     void logout(String username, String token);
-
 }

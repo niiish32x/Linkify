@@ -16,6 +16,7 @@ import com.nageoffer.shortlink.admin.dto.req.UserRegisterReqDTO;
 import com.nageoffer.shortlink.admin.dto.req.UserUpdateReqDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserLoginRespDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
+import com.nageoffer.shortlink.admin.service.GroupService;
 import com.nageoffer.shortlink.admin.service.UserService;
 //import org.springframework.beans.BeanUtils;
 import lombok.RequiredArgsConstructor;
@@ -155,7 +156,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 //        userInfoMap.put("token",JSON.toJSONString(userDO));
         stringRedisTemplate.opsForHash().put("login_"+ requestParam.getUsername(),uuid,JSON.toJSONString(userDO));
         // 设置过期时间
-        stringRedisTemplate.expire("login_"+requestParam.getUsername(),30L, TimeUnit.MINUTES);
+        stringRedisTemplate.expire("login_"+requestParam.getUsername(),30L, TimeUnit.DAYS);
         return new UserLoginRespDTO(uuid);
     }
 
@@ -174,6 +175,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         throw new ClientException("用户Token不存在或用户未登录");
     }
+
 }
 
 
