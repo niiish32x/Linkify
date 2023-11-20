@@ -22,6 +22,9 @@ public class UserConfiguration {
         FilterRegistrationBean<UserTransmitFilter> registration = new FilterRegistrationBean<>();
         registration.setFilter(new UserTransmitFilter(stringRedisTemplate));
         registration.addUrlPatterns("/*");
+        // 添加忽略路径
+        registration.addInitParameter("Login","/api/short-link/admin/v1/user/login");
+
         registration.setOrder(0);
         return registration;
     }
