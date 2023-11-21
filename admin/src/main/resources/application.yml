@@ -1,5 +1,5 @@
 server:
-  port: 8000
+  port: 8001
 #  持久层配置文件
 
 spring:
@@ -12,6 +12,6 @@ spring:
     # ShardingSphere 对 Driver 自定义，实现分库分表等隐藏逻辑
     driver-class-name: org.apache.shardingsphere.driver.ShardingSphereDriver
     # ShardingSphere 配置文件路径
-    url: jdbc:shardingsphere:classpath:shardingsphere-config.yaml
+    url: jdbc:shardingsphere:classpath:shardingsphere-config-${database.env:dev}.yaml
 
 
