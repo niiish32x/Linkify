@@ -23,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -30,8 +31,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import static com.nageoffer.shortlink.admin.common.constant.RedisCacheConstant.LOCK_USER_REGISTER_KEY;
-import static com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum.USER_NAME_EXIST;
-import static com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum.USER_SAVE_ERROR;
+import static com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum.*;
 
 
 /*
@@ -64,38 +64,32 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Override
     public Boolean hasUsername(String username) {
         // 直接使用布隆过滤器 判断用户名是否存在啊
-        return userRegisterCachePenetrationBloomFilter.contains(username);
+        return !userRegisterCachePenetrationBloomFilter.contains(username);
     }
 
     @Override
     public void register(UserRegisterReqDTO requestParam) {
-        // 存在返回true
-        // 表示用户名已经存在 不能再注册相同用户名 所以抛出异常
-        if (hasUsername(requestParam.getUsername())){
+        if (!hasUsername(requestParam.getUsername())) {
             throw new ClientException(USER_NAME_EXIST);
         }
-
-
-        // 如果不加 username 就成全局锁了
         RLock lock = redissonClient.getLock(LOCK_USER_REGISTER_KEY + requestParam.getUsername());
-
         try {
-            if (lock.tryLock()){
-                // 如果成功拿到锁 则进行用户注册
-                int inserted = baseMapper.insert(BeanUtil.toBean(requestParam, UserDO.class));
-                if(inserted < 1){
-                    throw new ClientException(USER_SAVE_ERROR);
+            if (lock.tryLock()) {
+                try {
+                    int inserted = baseMapper.insert(BeanUtil.toBean(requestParam, UserDO.class));
+                    if (inserted < 1) {
+                        throw new ClientException(USER_SAVE_ERROR);
+                    }
+                } catch (DuplicateKeyException ex) {
+                    throw new ClientException(USER_EXIST);
                 }
-
                 userRegisterCachePenetrationBloomFilter.add(requestParam.getUsername());
                 return;
             }
             throw new ClientException(USER_NAME_EXIST);
-        }finally {
-            // 最后释放锁
+        } finally {
             lock.unlock();
         }
-
     }
 
     @Override
