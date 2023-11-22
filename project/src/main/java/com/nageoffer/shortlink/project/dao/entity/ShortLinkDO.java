@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.nageoffer.shortlink.project.common.database.BaseDO;
 import lombok.Data;
 
@@ -25,7 +26,6 @@ import java.util.Date;
 
 /**
  * 短链接实体
- * 公众号：马丁玩编程，回复：加群，添加马哥微信（备注：link）获取项目资料
  */
 @Data
 @Builder
@@ -87,6 +87,7 @@ public class ShortLinkDO extends BaseDO {
     /**
      * 有效期
      */
+    @JsonFormat(locale="zh", timezone="GMT+8", pattern="yyyy-MM-dd")
     private Date validDate;
 
     /**
@@ -100,36 +101,36 @@ public class ShortLinkDO extends BaseDO {
      */
     private String favicon;
 
-    /**
-     * 历史PV
-     */
-    private Integer totalPv;
-
-    /**
-     * 历史UV
-     */
-    private Integer totalUv;
-
-    /**
-     * 历史UIP
-     */
-    private Integer totalUip;
-
-    /**
-     * 今日PV
-     */
-    @TableField(exist = false)
-    private Integer todayPv;
-
-    /**
-     * 今日UV
-     */
-    @TableField(exist = false)
-    private Integer todayUv;
-
-    /**
-     * 今日UIP
-     */
-    @TableField(exist = false)
-    private Integer todayUip;
+//    /**
+//     * 历史PV
+//     */
+//    private Integer totalPv;
+//
+//    /**
+//     * 历史UV
+//     */
+//    private Integer totalUv;
+//
+//    /**
+//     * 历史UIP
+//     */
+//    private Integer totalUip;
+//
+//    /**
+//     * 今日PV
+//     */
+//    @TableField(exist = false)
+//    private Integer todayPv;
+//
+//    /**
+//     * 今日UV
+//     */
+//    @TableField(exist = false)
+//    private Integer todayUv;
+//
+//    /**
+//     * 今日UIP
+//     */
+//    @TableField(exist = false)
+//    private Integer todayUip;
 }
