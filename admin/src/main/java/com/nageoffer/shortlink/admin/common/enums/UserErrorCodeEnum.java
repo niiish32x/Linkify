@@ -4,6 +4,7 @@ import com.nageoffer.shortlink.admin.common.convention.errorcode.IErrorCode;
 
 public enum UserErrorCodeEnum implements IErrorCode {
 
+    // 前端如果直接接收到A000200 则直接跳转至用户登录界面
     USER_TOKEN_FAIL("A000200", "用户Token验证失败"),
 
     USER_NULL("B000200", "用户记录不存在"),
