@@ -3,7 +3,9 @@ package com.nageoffer.shortlink.project.common.database;
 
 import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.TableField;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
+import org.checkerframework.checker.formatter.qual.Format;
 
 import java.util.Date;
 
@@ -17,12 +19,15 @@ public class BaseDO {
     /**
      * 创建时间
      */
+
+    @JsonFormat(locale="zh", timezone="GMT+8", pattern="yyyy-MM-dd")
     @TableField(fill = FieldFill.INSERT)
     private Date createTime;
 
     /**
      * 修改时间
      */
+    @JsonFormat(locale="zh", timezone="GMT+8", pattern="yyyy-MM-dd")
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private Date updateTime;
 

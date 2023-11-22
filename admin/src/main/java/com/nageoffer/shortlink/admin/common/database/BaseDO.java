@@ -4,6 +4,7 @@ package com.nageoffer.shortlink.admin.common.database;
 import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 import java.util.Date;
@@ -24,12 +25,14 @@ public class BaseDO {
     /**
      * 修改时间
      */
+    @JsonFormat(locale="zh", timezone="GMT+8", pattern="yyyy-MM-dd")
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private Date updateTime;
 
     /**
      * 删除标识 0：未删除 1：已删除
      */
+    @JsonFormat(locale="zh", timezone="GMT+8", pattern="yyyy-MM-dd")
     @TableField(value = "del_flag",fill = FieldFill.INSERT)
     private Integer delFlag;
 }
