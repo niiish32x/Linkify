@@ -1,2 +1,2 @@
-# shortlink
-短链接项目
+# Linkify
+Linkify短链接项目
