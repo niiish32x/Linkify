@@ -34,6 +34,8 @@ public class RecycleBinServiceImpl implements RecycleBinService {
 
     @Override
     public Result<IPage<ShortLinkPageRespDTO>> pageRecycleBinShortLink(ShortLinkRecycleBinPageReqDTO requestParam) {
+        // * 1. 匹配权限 该条短链接的拥有者 与 要删除短链接的用户相同则可以删除
+        // * 2. 如果 DelFlag = 0 即没有删除 那么就还可以查到
         LambdaQueryWrapper<GroupDO> queryWrapper = Wrappers.lambdaQuery(GroupDO.class)
                 .eq(GroupDO::getUsername, UserContext.getUsername())
                 .eq(GroupDO::getDelFlag, 0);

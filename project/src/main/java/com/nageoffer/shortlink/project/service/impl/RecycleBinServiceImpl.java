@@ -30,20 +30,35 @@ public class RecycleBinServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLin
 
     private final StringRedisTemplate stringRedisTemplate;
 
+    /**
+     * 删除短链接
+     * 但不是真正的删除 enableStatus 置为 1
+     * enableStatus 为启用标识 0：启用 1：未启用
+     * @param requestParam 请求参数
+     */
     @Override
     public void saveRecycleBin(RecycleBinSaveReqDTO requestParam) {
+        // * 并非真正删除 所以执行其实是update操作
         LambdaUpdateWrapper<ShortLinkDO> updateWrapper = Wrappers.lambdaUpdate(ShortLinkDO.class)
                 .eq(ShortLinkDO::getFullShortUrl, requestParam.getFullShortUrl())
                 .eq(ShortLinkDO::getGid, requestParam.getGid())
                 .eq(ShortLinkDO::getEnableStatus, 0)
                 .eq(ShortLinkDO::getDelFlag, 0);
+
         ShortLinkDO shortLinkDO = ShortLinkDO.builder()
                 .enableStatus(1)
                 .build();
         baseMapper.update(shortLinkDO, updateWrapper);
+
+        // * 将短链接 enableStatus置为1 后 再从Redis中将对应的键值删除
         stringRedisTemplate.delete(String.format(GOTO_SHORT_LINK_KEY, requestParam.getFullShortUrl()));
     }
 
+    /**
+     * 分页查询短链接回收站
+     * @param requestParam 分页查询短链接请求参数
+     * @return
+     */
     @Override
     public IPage<ShortLinkPageRespDTO> pageShortLink(ShortLinkRecycleBinPageReqDTO requestParam) {
         LambdaQueryWrapper<ShortLinkDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkDO.class)
@@ -66,10 +81,12 @@ public class RecycleBinServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLin
                 .eq(ShortLinkDO::getGid, requestParam.getGid())
                 .eq(ShortLinkDO::getEnableStatus, 1)
                 .eq(ShortLinkDO::getDelFlag, 0);
+        // * 其实就是修改一下标志位 将不可用重新置换为可用即可
         ShortLinkDO shortLinkDO = ShortLinkDO.builder()
                 .enableStatus(0)
                 .build();
         baseMapper.update(shortLinkDO, updateWrapper);
+        // * 最后再将Redis中存储的用于防止缓存穿透的字段 删除
         stringRedisTemplate.delete(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, requestParam.getFullShortUrl()));
     }
 
