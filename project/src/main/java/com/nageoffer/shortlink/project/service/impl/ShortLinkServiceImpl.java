@@ -17,10 +17,13 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.nageoffer.shortlink.project.common.config.GotoDomainWhiteListConfiguration;
 import com.nageoffer.shortlink.project.common.convention.exception.ClientException;
 import com.nageoffer.shortlink.project.common.convention.exception.ServiceException;
 import com.nageoffer.shortlink.project.common.enums.VailDateTypeEnum;
 import com.nageoffer.shortlink.project.dao.entity.*;
+import com.nageoffer.shortlink.project.dao.mapper.LinkAccessStatsMapper;
+import com.nageoffer.shortlink.project.dao.mapper.LinkLocaleStatsMapper;
 import com.nageoffer.shortlink.project.dao.mapper.ShortLinkGotoMapper;
 import com.nageoffer.shortlink.project.dao.mapper.ShortLinkMapper;
 import com.nageoffer.shortlink.project.dto.req.ShortLinkCreateReqDTO;
@@ -43,6 +46,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.dao.DuplicateKeyException;
@@ -69,6 +73,14 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     private final RedissonClient redissonClient;
     private final StringRedisTemplate stringRedisTemplate;
     private final ShortLinkGotoMapper shortLinkGotoMapper;
+    private final LinkLocaleStatsMapper linkLocaleStatsMapper;
+    private final LinkAccessStatsMapper linkAccessStatsMapper;
+
+    // 白名单功能配置类
+    private final GotoDomainWhiteListConfiguration gotoDomainWhiteListConfiguration;
+
+    @Value("${short-link.stats.locale.amap-key}")
+    private String statsLocaleAmapKey;
 
     @Override
     public ShortLinkCreateRespDTO createShortLink(ShortLinkCreateReqDTO requestParam) {
@@ -141,7 +153,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 .eq(ShortLinkDO::getDelFlag, 0)
                 .eq(ShortLinkDO::getEnableStatus, 0);
         ShortLinkDO hasShortLinkDO = baseMapper.selectOne(queryWrapper);
-        // 不过不存在那么就更新
+        // 如果不存在那么就更新
         if (hasShortLinkDO == null) {
             throw new ClientException("短链接记录不存在");
         }
@@ -329,33 +341,71 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     }
 
 
+    /**
+     * 短链接监控
+     * @param fullShortUrl
+     * @param gid
+     * @param request
+     * @param response
+     */
     private void shortLinkStats(String fullShortUrl, String gid, ServletRequest request, ServletResponse response) {
+        // ! uvFirstFlag 标记该用户是否为首次访问用户
         AtomicBoolean uvFirstFlag = new AtomicBoolean();
+        // ! cookie 存储用户端
         Cookie[] cookies = ((HttpServletRequest) request).getCookies();
+        // * uv -> 独立访客数
         try {
             AtomicReference<String> uv = new AtomicReference<>();
+            // * addResponseCookieTask:
+            // * 创建一个名为"uv"的Cookie，
+            // * 并将其添加到HttpServletResponse中发送给客户端。
+            // * 同时，将uv的值添加到Redis中的集合中，用于统计和管理独立访客数。
+            // * 如果uv已存在于客户端的Cookie中，则更新uvFirstFlag的值。
             Runnable addResponseCookieTask = () -> {
                 uv.set(UUID.fastUUID().toString());
                 Cookie uvCookie = new Cookie("uv", uv.get());
                 uvCookie.setMaxAge(60 * 60 * 24 * 30);
+                /*
+                    * Cookie的路径决定了哪些URL可以访问到该Cookie
+                    * Cookie的路径为当前请求的上下文路径（context path），也就是部署在Web服务器上的应用程序的根路径。
+                    * setPath方法的作用是允许开发人员自定义Cookie的路径，以便更精确地控制Cookie的访问范围
+                    * 通过设置不同的路径，可以实现对特定URL或目录的Cookie访问限制。
+                */
                 uvCookie.setPath(StrUtil.sub(fullShortUrl, fullShortUrl.indexOf("/"), fullShortUrl.length()));
                 ((HttpServletResponse) response).addCookie(uvCookie);
+                // ! 将uvFirstFlag 设置为True 表示该用户为第一次访问该短链接 即可以将用户访问量+1
                 uvFirstFlag.set(Boolean.TRUE);
+                // * 从Redis根据当前fullShortUrl 找到该路径下的所有用户
                 stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, uv.get());
             };
+            // * 根据当前用户的cookie是否为空 进行判断
             if (ArrayUtil.isNotEmpty(cookies)) {
+                // * 如果非空
                 Arrays.stream(cookies)
+                        // * 1.找到名为uv 的cookie
+                        // * 如果filter这一步没找到名为"uv"的cookie
+                        // * 由于使用了 ifPresentOrElse 方法 那么之后的步骤都会跳过 直接执行addResponseCookieTask
+                        // * 即为当前第一次访问的用户设置新的cookie 并将结果返回给用户端
                         .filter(each -> Objects.equals(each.getName(), "uv"))
                         .findFirst()
                         .map(Cookie::getValue)
                         .ifPresentOrElse(each -> {
                             uv.set(each);
+                            // ! uvAdded的作用是判断 向Redis中加入键值的操作是否成功
+                            /*
+                                * stringRedisTemplate.opsForSet().add()
+                                * 返回值有以下两种情况:
+                                * 1. 返回值为0: 表示未加入成功即Redis集合中有数据 -> 用户不是第一次访问
+                                * 2. 返回值 >0: 表示加入成功 Redis集合中本身没有相应的数据 -> 用户是第一次访问
+                            */
                             Long uvAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, each);
                             uvFirstFlag.set(uvAdded != null && uvAdded > 0L);
                         }, addResponseCookieTask);
             } else {
                 addResponseCookieTask.run();
             }
+
+            // ! 使用工具类 获取真实IP
             String remoteAddr = LinkUtil.getActualIp(((HttpServletRequest) request));
             Long uipAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uip:" + fullShortUrl, remoteAddr);
             boolean uipFirstFlag = uipAdded != null && uipAdded > 0L;
@@ -379,10 +429,54 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                     .date(new Date())
                     .build();
 
+
+            linkAccessStatsMapper.shortLinkStats(linkAccessStatsDO);
+            Map<String, Object> localeParamMap = new HashMap<>();
+            localeParamMap.put("key", statsLocaleAmapKey);
+            localeParamMap.put("ip", remoteAddr);
+            String localeResultStr = HttpUtil.get(AMAP_REMOTE_URL, localeParamMap);
+            JSONObject localeResultObj = JSON.parseObject(localeResultStr);
+            String infoCode = localeResultObj.getString("infocode");
+            String actualProvince;
+            String actualCity;
+            if (StrUtil.isNotBlank(infoCode) && StrUtil.equals(infoCode, "10000")) {
+                String province = localeResultObj.getString("province");
+                boolean unknownFlag = StrUtil.equals(province, "[]");
+                LinkLocaleStatsDO linkLocaleStatsDO = LinkLocaleStatsDO.builder()
+                        .province(actualProvince = unknownFlag ? "未知" : province)
+                        .city(actualCity = unknownFlag ? "未知" : localeResultObj.getString("city"))
+                        .adcode(unknownFlag ? "未知" : localeResultObj.getString("adcode"))
+                        .cnt(1)
+                        .fullShortUrl(fullShortUrl)
+                        .country("中国")
+                        .gid(gid)
+                        .date(new Date())
+                        .build();
+                linkLocaleStatsMapper.shortLinkLocaleState(linkLocaleStatsDO);
+
+            }
         } catch (Throwable ex) {
             log.error("短链接访问量统计异常", ex);
         }
     }
 
+    /**
+     * 白名单 认证功能: 只有在白名单内 的不违法的短链接才能进行创建和跳转
+     * @param originUrl
+     */
+    private void verificationWhitelist(String originUrl) {
+        Boolean enable = gotoDomainWhiteListConfiguration.getEnable();
+        if (enable == null || !enable) {
+            return;
+        }
+        String domain = LinkUtil.extractDomain(originUrl);
+        if (StrUtil.isBlank(domain)) {
+            throw new ClientException("跳转链接填写错误");
+        }
+        List<String> details = gotoDomainWhiteListConfiguration.getDetails();
+        if (!details.contains(domain)) {
+            throw new ClientException("演示环境为避免恶意攻击，请生成以下网站跳转链接：" + gotoDomainWhiteListConfiguration.getNames());
+        }
+    }
 
 }
