@@ -24,12 +24,14 @@ import com.nageoffer.shortlink.project.common.convention.exception.ServiceExcept
 import com.nageoffer.shortlink.project.common.enums.VailDateTypeEnum;
 import com.nageoffer.shortlink.project.dao.entity.*;
 import com.nageoffer.shortlink.project.dao.mapper.*;
+import com.nageoffer.shortlink.project.dto.biz.ShortLinkStatsRecordDTO;
 import com.nageoffer.shortlink.project.dto.req.ShortLinkCreateReqDTO;
 import com.nageoffer.shortlink.project.dto.req.ShortLinkPageReqDTO;
 import com.nageoffer.shortlink.project.dto.req.ShortLinkUpdateReqDTO;
 import com.nageoffer.shortlink.project.dto.resp.ShortLinkCreateRespDTO;
 import com.nageoffer.shortlink.project.dto.resp.ShortLinkGroupCountQueryRespDTO;
 import com.nageoffer.shortlink.project.dto.resp.ShortLinkPageRespDTO;
+import com.nageoffer.shortlink.project.mq.producer.DelayShortLinkStatsProducer;
 import com.nageoffer.shortlink.project.service.LinkStatsTodayService;
 import com.nageoffer.shortlink.project.service.ShortLinkService;
 import com.nageoffer.shortlink.project.toolkit.HashUtil;
@@ -54,8 +56,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -91,6 +91,9 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     // 白名单功能配置类
     private final GotoDomainWhiteListConfiguration gotoDomainWhiteListConfiguration;
 
+    // 延迟队列
+    private final DelayShortLinkStatsProducer delayShortLinkStatsProducer;
+
     @Value("${short-link.stats.locale.amap-key}")
     private String statsLocaleAmapKey;
 
@@ -100,13 +103,15 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
 
     @Override
     public ShortLinkCreateRespDTO createShortLink(ShortLinkCreateReqDTO requestParam) {
+        // * 先验证该链接 是否是在白名单 如果是的话 才可以创建
+        verificationWhitelist(requestParam.getOriginUrl());
         String shortLinkSuffix = generateSuffix(requestParam);
-        String fullShortUrl = StrBuilder.create(requestParam.getDomain())
+        String fullShortUrl = StrBuilder.create(createShortLinkDefaultDomain)
                 .append("/")
                 .append(shortLinkSuffix)
                 .toString();
         ShortLinkDO shortLinkDO = ShortLinkDO.builder()
-                .domain(requestParam.getDomain())
+                .domain(createShortLinkDefaultDomain)
                 .originUrl(requestParam.getOriginUrl())
                 .gid(requestParam.getGid())
                 .createdType(requestParam.getCreatedType())
@@ -115,11 +120,12 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 .describe(requestParam.getDescribe())
                 .shortUri(shortLinkSuffix)
                 .enableStatus(0)
-//                .totalPv(0)
-//                .totalUv(0)
-//                .totalUip(0)
+                .totalPv(0)
+                .totalUv(0)
+                .totalUip(0)
+                .delTime(0L)
                 .fullShortUrl(fullShortUrl)
-//                .favicon(getFavicon(requestParam.getOriginUrl()))
+                .favicon(getFavicon(requestParam.getOriginUrl()))
                 .build();
         ShortLinkGotoDO linkGotoDO = ShortLinkGotoDO.builder()
                 .fullShortUrl(fullShortUrl)
@@ -137,11 +143,13 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 throw new ServiceException("短链接生成重复");
             }
         }
+        // ! 缓存预热 将新创建的短链接 直接加入Redis中 防止后续的访问过多扫盘访问数据库
         stringRedisTemplate.opsForValue().set(
                 String.format(GOTO_SHORT_LINK_KEY, fullShortUrl),
                 requestParam.getOriginUrl(),
                 LinkUtil.getLinkCacheValidTime(requestParam.getValidDate()), TimeUnit.MILLISECONDS
         );
+        // * 已存在的链接 那么直接加入 布隆过滤器
         shortUriCreateCachePenetrationBloomFilter.add(fullShortUrl);
         return ShortLinkCreateRespDTO.builder()
                 .fullShortUrl("http://" + shortLinkDO.getFullShortUrl())
@@ -149,6 +157,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 .gid(requestParam.getGid())
                 .build();
     }
+
     @Override
     public IPage<ShortLinkPageRespDTO> pageShortLink(ShortLinkPageReqDTO requestParam) {
         IPage<ShortLinkDO> resultPage = baseMapper.pageLink(requestParam);
@@ -162,23 +171,35 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     @Transactional(rollbackFor = Exception.class)
     @Override
     public void updateShortLink(ShortLinkUpdateReqDTO requestParam) {
+        // * 如果是白名单中的链接 那么可以进行更新
         verificationWhitelist(requestParam.getOriginUrl());
+        // 1. 从入参读入需要修改的短链接 g
+        // 2. 根据 原始Gid getOriginGid 以及 完整的长连接 getFullShortUrl 进行查找
         LambdaQueryWrapper<ShortLinkDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkDO.class)
                 .eq(ShortLinkDO::getGid, requestParam.getOriginGid())
                 .eq(ShortLinkDO::getFullShortUrl, requestParam.getFullShortUrl())
                 .eq(ShortLinkDO::getDelFlag, 0)
                 .eq(ShortLinkDO::getEnableStatus, 0);
+        // 找到这条需要修改的链接
         ShortLinkDO hasShortLinkDO = baseMapper.selectOne(queryWrapper);
         if (hasShortLinkDO == null) {
             throw new ClientException("短链接记录不存在");
         }
+
+        // * 修改 分为两种情况:
+        // * 1. 不修改链接分组: 这种就比较简单直接对该链接进行修改即可
+        // * 2. 修改链接分组: 那么就要同步更新 链接分组下的信息(如该链接下存在哪些链接 链接数量) 在修改该链接的同时就要对要分组信息进行修改 因此需要上读写锁
         if (Objects.equals(hasShortLinkDO.getGid(), requestParam.getGid())) {
+            // * gid 相等 即 不涉及修改分组操作
+
+            // 1. 填入修改后的信息
             LambdaUpdateWrapper<ShortLinkDO> updateWrapper = Wrappers.lambdaUpdate(ShortLinkDO.class)
                     .eq(ShortLinkDO::getFullShortUrl, requestParam.getFullShortUrl())
                     .eq(ShortLinkDO::getGid, requestParam.getGid())
                     .eq(ShortLinkDO::getDelFlag, 0)
                     .eq(ShortLinkDO::getEnableStatus, 0)
                     .set(Objects.equals(requestParam.getValidDateType(), VailDateTypeEnum.PERMANENT.getType()), ShortLinkDO::getValidDate, null);
+            // 2. 建立实体 然后进行更新
             ShortLinkDO shortLinkDO = ShortLinkDO.builder()
                     .domain(hasShortLinkDO.getDomain())
                     .shortUri(hasShortLinkDO.getShortUri())
@@ -192,22 +213,34 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                     .build();
             baseMapper.update(shortLinkDO, updateWrapper);
         } else {
+            // ! 修改链接的同时 修改分组
+            /*
+            * 读写锁:
+            * 读写锁用于对共享资源的并发控制
+            * 读写锁的特点是：同一时刻允许多个线程对共享资源进行读操作；
+            * 同一时刻只允许一个线程对共享资源进行写操作；当进行写操作时，同一时刻其他线程的读操作会被阻塞；
+            * 当进行读操作时，同一时刻所有线程的写操作会被阻塞。
+            * */
             RReadWriteLock readWriteLock = redissonClient.getReadWriteLock(String.format(LOCK_GID_UPDATE_KEY, requestParam.getFullShortUrl()));
             RLock rLock = readWriteLock.writeLock();
             if (!rLock.tryLock()) {
                 throw new ServiceException("短链接正在被访问，请稍后再试...");
             }
             try {
+                // * 找到原链接
                 LambdaUpdateWrapper<ShortLinkDO> linkUpdateWrapper = Wrappers.lambdaUpdate(ShortLinkDO.class)
                         .eq(ShortLinkDO::getFullShortUrl, requestParam.getFullShortUrl())
                         .eq(ShortLinkDO::getGid, hasShortLinkDO.getGid())
                         .eq(ShortLinkDO::getDelFlag, 0)
                         .eq(ShortLinkDO::getDelTime, 0L)
                         .eq(ShortLinkDO::getEnableStatus, 0);
+
+                // * 初始化 删除原链接
                 ShortLinkDO delShortLinkDO = ShortLinkDO.builder()
                         .delTime(System.currentTimeMillis())
                         .build();
                 delShortLinkDO.setDelFlag(1);
+                // * 完成删除实体的设置 -> 就是将原链接实体设置为删除状态
                 baseMapper.update(delShortLinkDO, linkUpdateWrapper);
                 ShortLinkDO shortLinkDO = ShortLinkDO.builder()
                         .domain(createShortLinkDefaultDomain)
@@ -304,9 +337,12 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                         .build();
                 linkAccessLogsMapper.update(linkAccessLogsDO, linkAccessLogsUpdateWrapper);
             } finally {
+                // ! 修改完毕 释放锁
                 rLock.unlock();
             }
         }
+
+        // * 最后根据修改完的日期做一个
         if (!Objects.equals(hasShortLinkDO.getValidDateType(), requestParam.getValidDateType())
                 || !Objects.equals(hasShortLinkDO.getValidDate(), requestParam.getValidDate())) {
             stringRedisTemplate.delete(String.format(GOTO_SHORT_LINK_KEY, requestParam.getFullShortUrl()));
@@ -333,165 +369,120 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     @Override
     public void restoreUrl(String shortUri, ServletRequest request, ServletResponse response) {
         String serverName = request.getServerName();
-        String fullShortUrl = serverName + "/" + shortUri;
-
-        /*
-         * 先访问 缓存(Redis) 判断key值(GOTO_SHORT_LINK_KEY)是否存在
-         * 如果存在 isNotBlank(originalLink) -> 直接从缓存中拿
-         * 然后根据原始链接(originalLink) 重定向
-         */
+        String serverPort = Optional.of(request.getServerPort())
+                .filter(each -> !Objects.equals(each, 80))
+                .map(String::valueOf)
+                .map(each -> ":" + each)
+                .orElse("");
+        String fullShortUrl = serverName + serverPort + "/" + shortUri;
         String originalLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_SHORT_LINK_KEY, fullShortUrl));
         if (StrUtil.isNotBlank(originalLink)) {
-            // * 进行后 跳转后进行 短链接监控
-            shortLinkStats(fullShortUrl, null, request, response);
+            ShortLinkStatsRecordDTO statsRecord = buildLinkStatsRecordAndSetUser(fullShortUrl, request, response);
+            shortLinkStats(fullShortUrl, null, statsRecord);
             ((HttpServletResponse) response).sendRedirect(originalLink);
             return;
         }
-
-        /*
-            *使用布隆过滤器判断 要请求的短链接是否存在
-            !使用布隆过滤器主要是为了防止 缓存穿透现象的发生(缓存穿透: 大量请求范围 不存在的key值 大量去请求数据库导致数据库宕机)
-            *使用布隆过滤器后 请求来后会现在布隆过滤器中判断一次是否存在 不存在直接返回即可(虽然误判 但不存在基本不会误判)
-         */
-
         boolean contains = shortUriCreateCachePenetrationBloomFilter.contains(fullShortUrl);
         if (!contains) {
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
-
-        /*
-            * 如果布隆过滤器中存在
-            ! 那么判断该条短链是否是 之前判断过的 指向空的短链接 (这一步是为了防止 重复查路由表)
-            * 如果存在直接返回短链 省去之后查路由表的操作
-        */
-
         String gotoIsNullShortLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl));
-
-        /*
-            * 如果路由表中也没有
-            * 直接返回
-        */
         if (StrUtil.isNotBlank(gotoIsNullShortLink)) {
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
-
-        // !上面判断完该条短链接 目前而言在系统中是不存在空地址的
-        // ! 接下来要去操作 数据库 涉及到资源的并发控制
-        // ! 使用上锁 进行限流 并完成并发操作
         RLock lock = redissonClient.getLock(String.format(LOCK_GOTO_SHORT_LINK_KEY, fullShortUrl));
         lock.lock();
         try {
-            // *先去缓存中拿原始链接 原始链接存在则直接 跳转
             originalLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_SHORT_LINK_KEY, fullShortUrl));
             if (StrUtil.isNotBlank(originalLink)) {
-                shortLinkStats(fullShortUrl, null, request, response);
+                ShortLinkStatsRecordDTO statsRecord = buildLinkStatsRecordAndSetUser(fullShortUrl, request, response);
+                shortLinkStats(fullShortUrl, null, statsRecord);
                 ((HttpServletResponse) response).sendRedirect(originalLink);
                 return;
             }
-
-            /*
-                * 缓存中没有那么接下来去数据库中找
-                * 先查路由表(t_link_go) 路由表的结构(id:gid:full_short_url)
-                * 根据用户传入的fullShortUrl 判断路由表中该记录是否存在
-             */
             LambdaQueryWrapper<ShortLinkGotoDO> linkGotoQueryWrapper = Wrappers.lambdaQuery(ShortLinkGotoDO.class)
                     .eq(ShortLinkGotoDO::getFullShortUrl, fullShortUrl);
             ShortLinkGotoDO shortLinkGotoDO = shortLinkGotoMapper.selectOne(linkGotoQueryWrapper);
-
-            /*
-                * 如果路由表中这条记录不存在 shortLinkGotoDO == null
-                * 直接将 短链接空值跳转前缀 存入Redis 这样下一次访问直接就可从Redis中拿避免了 对数据库大量请求
-                * 然后返回空页
-            */
             if (shortLinkGotoDO == null) {
                 stringRedisTemplate.opsForValue().set(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl), "-", 30, TimeUnit.MINUTES);
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
-
-            /*
-                * 如果路由表中的记录也不为空
-                * 那么接下来根据路由表的信息 去查短链接表
-                * 如果没找到同样将该条短链接为空的信息 将该条短链接为空的信息直接存入
-            */
             LambdaQueryWrapper<ShortLinkDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkDO.class)
                     .eq(ShortLinkDO::getGid, shortLinkGotoDO.getGid())
                     .eq(ShortLinkDO::getFullShortUrl, fullShortUrl)
                     .eq(ShortLinkDO::getDelFlag, 0)
                     .eq(ShortLinkDO::getEnableStatus, 0);
             ShortLinkDO shortLinkDO = baseMapper.selectOne(queryWrapper);
-            if (shortLinkDO == null || shortLinkDO.getValidDate().before(new Date())) {
+            if (shortLinkDO == null || (shortLinkDO.getValidDate() != null && shortLinkDO.getValidDate().before(new Date()))) {
                 stringRedisTemplate.opsForValue().set(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl), "-", 30, TimeUnit.MINUTES);
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
-
-            /*
-                * 对当前跳转过的链接 如果也不存在就同样的操作步骤
-                * 找到了那么就返回即可
-             */
             stringRedisTemplate.opsForValue().set(
                     String.format(GOTO_SHORT_LINK_KEY, fullShortUrl),
                     shortLinkDO.getOriginUrl(),
                     LinkUtil.getLinkCacheValidTime(shortLinkDO.getValidDate()), TimeUnit.MILLISECONDS
             );
-            shortLinkStats(fullShortUrl, shortLinkDO.getGid(), request, response);
+            ShortLinkStatsRecordDTO statsRecord = buildLinkStatsRecordAndSetUser(fullShortUrl, request, response);
+            shortLinkStats(fullShortUrl, shortLinkDO.getGid(), statsRecord);
             ((HttpServletResponse) response).sendRedirect(shortLinkDO.getOriginUrl());
         } finally {
-            // * 最后释放锁
             lock.unlock();
         }
     }
 
-    private String generateSuffix(ShortLinkCreateReqDTO requestParam) {
-        int customGenerateCount = 0;
-        String shorUri;
-        // 如果发生冲突则重新生成
-        while (true) {
-            if (customGenerateCount > 10) {
-                throw new ServiceException("短链接频繁生成，请稍后再试");
-            }
-            String originUrl = requestParam.getOriginUrl();
-            // 将冲突的概率 降到最低
-            originUrl += System.currentTimeMillis();
-            shorUri = HashUtil.hashToBase62(originUrl);
-            if (!shortUriCreateCachePenetrationBloomFilter.contains(requestParam.getDomain() + "/" + shorUri)) {
-                break;
-            }
-            customGenerateCount++;
-        }
-        return shorUri;
-    }
-
-
     /**
-     * 短链接监控
-     * @param fullShortUrl
-     * @param gid
-     * @param request
-     * @param response
+     * 短链接监控信息统计
+     * @param fullShortUrl         完整短链接
+     * @param gid                  分组标识
+     * @param statsRecord 短链接统计实体参数
      */
     @Override
     public void shortLinkStats(String fullShortUrl, String gid, ShortLinkStatsRecordDTO statsRecord) {
+        /*
+        * Java中的Optional类是用于处理可能为空（null）的值的容器类。
+        * 它的主要作用是解决空指针异常（NullPointerException）的问题，
+        * 并提供了一种更加优雅和安全的方式来处理可能为空的值。
+        *
+        * ofNullable(T value)：创建一个Optional实例，可以包含一个可能为空的值。
+        * isPresent()：判断Optional实例是否包含非空值。
+        * get()：获取Optional实例中的值，如果值为空，则抛出NoSuchElementException异常。
+        * orElse(T other)：获取Optional实例中的值，如果值为空，则返回指定的默认值。
+        * ifPresent(Consumer<? super T> consumer)：如果Optional实例中的值非空，则执行指定的操作。
+        *
+        * */
         fullShortUrl = Optional.ofNullable(fullShortUrl).orElse(statsRecord.getFullShortUrl());
         RReadWriteLock readWriteLock = redissonClient.getReadWriteLock(String.format(LOCK_GID_UPDATE_KEY, fullShortUrl));
         RLock rLock = readWriteLock.readLock();
+
+        // * 尝试获取读锁
+        // * 如果正在读 那么说明该条链接正在被访问 那么延迟监控 将请求先装入延迟队列中
         if (!rLock.tryLock()) {
             delayShortLinkStatsProducer.send(statsRecord);
             return;
         }
+
+        /*
+        * 对于链接相关信息进行统计
+        * */
         try {
             if (StrUtil.isBlank(gid)) {
+                // * 分组ID 为空 那么要找到分组ID GID -> 对应的是在进行链接跳转时 原始链接非空的情况 即存在原始链接可以进行正常跳转
+                // * 所以不需要传入 新的GID 直接根据 FullShortUrl 找到相应GID 进行相关监控操作即可
                 LambdaQueryWrapper<ShortLinkGotoDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkGotoDO.class)
                         .eq(ShortLinkGotoDO::getFullShortUrl, fullShortUrl);
                 ShortLinkGotoDO shortLinkGotoDO = shortLinkGotoMapper.selectOne(queryWrapper);
                 gid = shortLinkGotoDO.getGid();
             }
+            // * 分组非空 其实就是跳转时 已经到找到了 数据库中完整长链接的那一步了 那么既然已经到了查数据库这一步 那么直接顺便返回gid 相当于是操作进行了优化
             int hour = DateUtil.hour(new Date(), true);
             Week week = DateUtil.dayOfWeekEnum(new Date());
             int weekValue = week.getIso8601Value();
+
+            // * 下面就是一些监控信息更新操作
             LinkAccessStatsDO linkAccessStatsDO = LinkAccessStatsDO.builder()
                     .pv(1)
                     .uv(statsRecord.getUvFirstFlag() ? 1 : 0)
@@ -583,6 +574,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
         } catch (Throwable ex) {
             log.error("短链接访问量统计异常", ex);
         } finally {
+            // 最后释放锁
             rLock.unlock();
         }
     }
@@ -606,126 +598,6 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
         }
         return shorUri;
     }
-
-
-//    /**
-//     * 短链接监控
-//     * @param fullShortUrl
-//     * @param gid
-//     * @param request
-//     * @param response
-//     */
-//    private void shortLinkStats(String fullShortUrl, String gid, ServletRequest request, ServletResponse response) {
-//        // ! uvFirstFlag 标记该用户是否为首次访问用户
-//        AtomicBoolean uvFirstFlag = new AtomicBoolean();
-//        // ! cookie 存储用户端
-//        Cookie[] cookies = ((HttpServletRequest) request).getCookies();
-//        // * uv -> 独立访客数
-//        try {
-//            AtomicReference<String> uv = new AtomicReference<>();
-//            // * addResponseCookieTask:
-//            // * 创建一个名为"uv"的Cookie，
-//            // * 并将其添加到HttpServletResponse中发送给客户端。
-//            // * 同时，将uv的值添加到Redis中的集合中，用于统计和管理独立访客数。
-//            // * 如果uv已存在于客户端的Cookie中，则更新uvFirstFlag的值。
-//            Runnable addResponseCookieTask = () -> {
-//                uv.set(UUID.fastUUID().toString());
-//                Cookie uvCookie = new Cookie("uv", uv.get());
-//                uvCookie.setMaxAge(60 * 60 * 24 * 30);
-//                /*
-//                    * Cookie的路径决定了哪些URL可以访问到该Cookie
-//                    * Cookie的路径为当前请求的上下文路径（context path），也就是部署在Web服务器上的应用程序的根路径。
-//                    * setPath方法的作用是允许开发人员自定义Cookie的路径，以便更精确地控制Cookie的访问范围
-//                    * 通过设置不同的路径，可以实现对特定URL或目录的Cookie访问限制。
-//                */
-//                uvCookie.setPath(StrUtil.sub(fullShortUrl, fullShortUrl.indexOf("/"), fullShortUrl.length()));
-//                ((HttpServletResponse) response).addCookie(uvCookie);
-//                // ! 将uvFirstFlag 设置为True 表示该用户为第一次访问该短链接 即可以将用户访问量+1
-//                uvFirstFlag.set(Boolean.TRUE);
-//                // * 从Redis根据当前fullShortUrl 找到该路径下的所有用户
-//                stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, uv.get());
-//            };
-//            // * 根据当前用户的cookie是否为空 进行判断
-//            if (ArrayUtil.isNotEmpty(cookies)) {
-//                // * 如果非空
-//                Arrays.stream(cookies)
-//                        // * 1.找到名为uv 的cookie
-//                        // * 如果filter这一步没找到名为"uv"的cookie
-//                        // * 由于使用了 ifPresentOrElse 方法 那么之后的步骤都会跳过 直接执行addResponseCookieTask
-//                        // * 即为当前第一次访问的用户设置新的cookie 并将结果返回给用户端
-//                        .filter(each -> Objects.equals(each.getName(), "uv"))
-//                        .findFirst()
-//                        .map(Cookie::getValue)
-//                        .ifPresentOrElse(each -> {
-//                            uv.set(each);
-//                            // ! uvAdded的作用是判断 向Redis中加入键值的操作是否成功
-//                            /*
-//                                * stringRedisTemplate.opsForSet().add()
-//                                * 返回值有以下两种情况:
-//                                * 1. 返回值为0: 表示未加入成功即Redis集合中有数据 -> 用户不是第一次访问
-//                                * 2. 返回值 >0: 表示加入成功 Redis集合中本身没有相应的数据 -> 用户是第一次访问
-//                            */
-//                            Long uvAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, each);
-//                            uvFirstFlag.set(uvAdded != null && uvAdded > 0L);
-//                        }, addResponseCookieTask);
-//            } else {
-//                addResponseCookieTask.run();
-//            }
-//
-//            // ! 使用工具类 获取真实IP
-//            String remoteAddr = LinkUtil.getActualIp(((HttpServletRequest) request));
-//            Long uipAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uip:" + fullShortUrl, remoteAddr);
-//            boolean uipFirstFlag = uipAdded != null && uipAdded > 0L;
-//            if (StrUtil.isBlank(gid)) {
-//                LambdaQueryWrapper<ShortLinkGotoDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkGotoDO.class)
-//                        .eq(ShortLinkGotoDO::getFullShortUrl, fullShortUrl);
-//                ShortLinkGotoDO shortLinkGotoDO = shortLinkGotoMapper.selectOne(queryWrapper);
-//                gid = shortLinkGotoDO.getGid();
-//            }
-//            int hour = DateUtil.hour(new Date(), true);
-//            Week week = DateUtil.dayOfWeekEnum(new Date());
-//            int weekValue = week.getIso8601Value();
-//            LinkAccessStatsDO linkAccessStatsDO = LinkAccessStatsDO.builder()
-//                    .pv(1)
-//                    .uv(uvFirstFlag.get() ? 1 : 0)
-//                    .uip(uipFirstFlag ? 1 : 0)
-//                    .hour(hour)
-//                    .weekday(weekValue)
-//                    .fullShortUrl(fullShortUrl)
-//                    .gid(gid)
-//                    .date(new Date())
-//                    .build();
-//
-//
-//            linkAccessStatsMapper.shortLinkStats(linkAccessStatsDO);
-//            Map<String, Object> localeParamMap = new HashMap<>();
-//            localeParamMap.put("key", statsLocaleAmapKey);
-//            localeParamMap.put("ip", remoteAddr);
-//            String localeResultStr = HttpUtil.get(AMAP_REMOTE_URL, localeParamMap);
-//            JSONObject localeResultObj = JSON.parseObject(localeResultStr);
-//            String infoCode = localeResultObj.getString("infocode");
-//            String actualProvince;
-//            String actualCity;
-//            if (StrUtil.isNotBlank(infoCode) && StrUtil.equals(infoCode, "10000")) {
-//                String province = localeResultObj.getString("province");
-//                boolean unknownFlag = StrUtil.equals(province, "[]");
-//                LinkLocaleStatsDO linkLocaleStatsDO = LinkLocaleStatsDO.builder()
-//                        .province(actualProvince = unknownFlag ? "未知" : province)
-//                        .city(actualCity = unknownFlag ? "未知" : localeResultObj.getString("city"))
-//                        .adcode(unknownFlag ? "未知" : localeResultObj.getString("adcode"))
-//                        .cnt(1)
-//                        .fullShortUrl(fullShortUrl)
-//                        .country("中国")
-//                        .gid(gid)
-//                        .date(new Date())
-//                        .build();
-//                linkLocaleStatsMapper.shortLinkLocaleState(linkLocaleStatsDO);
-//
-//            }
-//        } catch (Throwable ex) {
-//            log.error("短链接访问量统计异常", ex);
-//        }
-//    }
 
     /**
      * 白名单 认证功能: 只有在白名单内 的不违法的短链接才能进行创建和跳转
@@ -821,5 +693,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 .network(network)
                 .build();
     }
+
+
 
 }
