@@ -473,67 +473,16 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
      * @param request
      * @param response
      */
-    private void shortLinkStats(String fullShortUrl, String gid, ServletRequest request, ServletResponse response) {
-        // ! uvFirstFlag 标记该用户是否为首次访问用户
-        AtomicBoolean uvFirstFlag = new AtomicBoolean();
-        // ! cookie 存储用户端
-        Cookie[] cookies = ((HttpServletRequest) request).getCookies();
-        // * uv -> 独立访客数
+    @Override
+    public void shortLinkStats(String fullShortUrl, String gid, ShortLinkStatsRecordDTO statsRecord) {
+        fullShortUrl = Optional.ofNullable(fullShortUrl).orElse(statsRecord.getFullShortUrl());
+        RReadWriteLock readWriteLock = redissonClient.getReadWriteLock(String.format(LOCK_GID_UPDATE_KEY, fullShortUrl));
+        RLock rLock = readWriteLock.readLock();
+        if (!rLock.tryLock()) {
+            delayShortLinkStatsProducer.send(statsRecord);
+            return;
+        }
         try {
-            AtomicReference<String> uv = new AtomicReference<>();
-            // * addResponseCookieTask:
-            // * 创建一个名为"uv"的Cookie，
-            // * 并将其添加到HttpServletResponse中发送给客户端。
-            // * 同时，将uv的值添加到Redis中的集合中，用于统计和管理独立访客数。
-            // * 如果uv已存在于客户端的Cookie中，则更新uvFirstFlag的值。
-            Runnable addResponseCookieTask = () -> {
-                uv.set(UUID.fastUUID().toString());
-                Cookie uvCookie = new Cookie("uv", uv.get());
-                uvCookie.setMaxAge(60 * 60 * 24 * 30);
-                /*
-                    * Cookie的路径决定了哪些URL可以访问到该Cookie
-                    * Cookie的路径为当前请求的上下文路径（context path），也就是部署在Web服务器上的应用程序的根路径。
-                    * setPath方法的作用是允许开发人员自定义Cookie的路径，以便更精确地控制Cookie的访问范围
-                    * 通过设置不同的路径，可以实现对特定URL或目录的Cookie访问限制。
-                */
-                uvCookie.setPath(StrUtil.sub(fullShortUrl, fullShortUrl.indexOf("/"), fullShortUrl.length()));
-                ((HttpServletResponse) response).addCookie(uvCookie);
-                // ! 将uvFirstFlag 设置为True 表示该用户为第一次访问该短链接 即可以将用户访问量+1
-                uvFirstFlag.set(Boolean.TRUE);
-                // * 从Redis根据当前fullShortUrl 找到该路径下的所有用户
-                stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, uv.get());
-            };
-            // * 根据当前用户的cookie是否为空 进行判断
-            if (ArrayUtil.isNotEmpty(cookies)) {
-                // * 如果非空
-                Arrays.stream(cookies)
-                        // * 1.找到名为uv 的cookie
-                        // * 如果filter这一步没找到名为"uv"的cookie
-                        // * 由于使用了 ifPresentOrElse 方法 那么之后的步骤都会跳过 直接执行addResponseCookieTask
-                        // * 即为当前第一次访问的用户设置新的cookie 并将结果返回给用户端
-                        .filter(each -> Objects.equals(each.getName(), "uv"))
-                        .findFirst()
-                        .map(Cookie::getValue)
-                        .ifPresentOrElse(each -> {
-                            uv.set(each);
-                            // ! uvAdded的作用是判断 向Redis中加入键值的操作是否成功
-                            /*
-                                * stringRedisTemplate.opsForSet().add()
-                                * 返回值有以下两种情况:
-                                * 1. 返回值为0: 表示未加入成功即Redis集合中有数据 -> 用户不是第一次访问
-                                * 2. 返回值 >0: 表示加入成功 Redis集合中本身没有相应的数据 -> 用户是第一次访问
-                            */
-                            Long uvAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, each);
-                            uvFirstFlag.set(uvAdded != null && uvAdded > 0L);
-                        }, addResponseCookieTask);
-            } else {
-                addResponseCookieTask.run();
-            }
-
-            // ! 使用工具类 获取真实IP
-            String remoteAddr = LinkUtil.getActualIp(((HttpServletRequest) request));
-            Long uipAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uip:" + fullShortUrl, remoteAddr);
-            boolean uipFirstFlag = uipAdded != null && uipAdded > 0L;
             if (StrUtil.isBlank(gid)) {
                 LambdaQueryWrapper<ShortLinkGotoDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkGotoDO.class)
                         .eq(ShortLinkGotoDO::getFullShortUrl, fullShortUrl);
@@ -545,31 +494,29 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
             int weekValue = week.getIso8601Value();
             LinkAccessStatsDO linkAccessStatsDO = LinkAccessStatsDO.builder()
                     .pv(1)
-                    .uv(uvFirstFlag.get() ? 1 : 0)
-                    .uip(uipFirstFlag ? 1 : 0)
+                    .uv(statsRecord.getUvFirstFlag() ? 1 : 0)
+                    .uip(statsRecord.getUipFirstFlag() ? 1 : 0)
                     .hour(hour)
                     .weekday(weekValue)
                     .fullShortUrl(fullShortUrl)
                     .gid(gid)
                     .date(new Date())
                     .build();
-
-
             linkAccessStatsMapper.shortLinkStats(linkAccessStatsDO);
             Map<String, Object> localeParamMap = new HashMap<>();
             localeParamMap.put("key", statsLocaleAmapKey);
-            localeParamMap.put("ip", remoteAddr);
+            localeParamMap.put("ip", statsRecord.getRemoteAddr());
             String localeResultStr = HttpUtil.get(AMAP_REMOTE_URL, localeParamMap);
             JSONObject localeResultObj = JSON.parseObject(localeResultStr);
             String infoCode = localeResultObj.getString("infocode");
-            String actualProvince;
-            String actualCity;
+            String actualProvince = "未知";
+            String actualCity = "未知";
             if (StrUtil.isNotBlank(infoCode) && StrUtil.equals(infoCode, "10000")) {
                 String province = localeResultObj.getString("province");
                 boolean unknownFlag = StrUtil.equals(province, "[]");
                 LinkLocaleStatsDO linkLocaleStatsDO = LinkLocaleStatsDO.builder()
-                        .province(actualProvince = unknownFlag ? "未知" : province)
-                        .city(actualCity = unknownFlag ? "未知" : localeResultObj.getString("city"))
+                        .province(actualProvince = unknownFlag ? actualProvince : province)
+                        .city(actualCity = unknownFlag ? actualCity : localeResultObj.getString("city"))
                         .adcode(unknownFlag ? "未知" : localeResultObj.getString("adcode"))
                         .cnt(1)
                         .fullShortUrl(fullShortUrl)
@@ -578,12 +525,207 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                         .date(new Date())
                         .build();
                 linkLocaleStatsMapper.shortLinkLocaleState(linkLocaleStatsDO);
-
             }
+            LinkOsStatsDO linkOsStatsDO = LinkOsStatsDO.builder()
+                    .os(statsRecord.getOs())
+                    .cnt(1)
+                    .gid(gid)
+                    .fullShortUrl(fullShortUrl)
+                    .date(new Date())
+                    .build();
+            linkOsStatsMapper.shortLinkOsState(linkOsStatsDO);
+            LinkBrowserStatsDO linkBrowserStatsDO = LinkBrowserStatsDO.builder()
+                    .browser(statsRecord.getBrowser())
+                    .cnt(1)
+                    .gid(gid)
+                    .fullShortUrl(fullShortUrl)
+                    .date(new Date())
+                    .build();
+            linkBrowserStatsMapper.shortLinkBrowserState(linkBrowserStatsDO);
+            LinkDeviceStatsDO linkDeviceStatsDO = LinkDeviceStatsDO.builder()
+                    .device(statsRecord.getDevice())
+                    .cnt(1)
+                    .gid(gid)
+                    .fullShortUrl(fullShortUrl)
+                    .date(new Date())
+                    .build();
+            linkDeviceStatsMapper.shortLinkDeviceState(linkDeviceStatsDO);
+            LinkNetworkStatsDO linkNetworkStatsDO = LinkNetworkStatsDO.builder()
+                    .network(statsRecord.getNetwork())
+                    .cnt(1)
+                    .gid(gid)
+                    .fullShortUrl(fullShortUrl)
+                    .date(new Date())
+                    .build();
+            linkNetworkStatsMapper.shortLinkNetworkState(linkNetworkStatsDO);
+            LinkAccessLogsDO linkAccessLogsDO = LinkAccessLogsDO.builder()
+                    .user(statsRecord.getUv())
+                    .ip(statsRecord.getRemoteAddr())
+                    .browser(statsRecord.getBrowser())
+                    .os(statsRecord.getOs())
+                    .network(statsRecord.getNetwork())
+                    .device(statsRecord.getDevice())
+                    .locale(StrUtil.join("-", "中国", actualProvince, actualCity))
+                    .gid(gid)
+                    .fullShortUrl(fullShortUrl)
+                    .build();
+            linkAccessLogsMapper.insert(linkAccessLogsDO);
+            baseMapper.incrementStats(gid, fullShortUrl, 1, statsRecord.getUvFirstFlag() ? 1 : 0, statsRecord.getUipFirstFlag() ? 1 : 0);
+            LinkStatsTodayDO linkStatsTodayDO = LinkStatsTodayDO.builder()
+                    .todayPv(1)
+                    .todayUv(statsRecord.getUvFirstFlag() ? 1 : 0)
+                    .todayUip(statsRecord.getUipFirstFlag() ? 1 : 0)
+                    .gid(gid)
+                    .fullShortUrl(fullShortUrl)
+                    .date(new Date())
+                    .build();
+            linkStatsTodayMapper.shortLinkTodayState(linkStatsTodayDO);
         } catch (Throwable ex) {
             log.error("短链接访问量统计异常", ex);
+        } finally {
+            rLock.unlock();
         }
     }
+
+    private String generateSuffix(ShortLinkCreateReqDTO requestParam) {
+        int customGenerateCount = 0;
+        String shorUri;
+        // 如果发生冲突则重新生成
+        while (true) {
+            if (customGenerateCount > 10) {
+                throw new ServiceException("短链接频繁生成，请稍后再试");
+            }
+            String originUrl = requestParam.getOriginUrl();
+            // 将冲突的概率 降到最低
+            originUrl += System.currentTimeMillis();
+            shorUri = HashUtil.hashToBase62(originUrl);
+            if (!shortUriCreateCachePenetrationBloomFilter.contains(requestParam.getDomain() + "/" + shorUri)) {
+                break;
+            }
+            customGenerateCount++;
+        }
+        return shorUri;
+    }
+
+
+//    /**
+//     * 短链接监控
+//     * @param fullShortUrl
+//     * @param gid
+//     * @param request
+//     * @param response
+//     */
+//    private void shortLinkStats(String fullShortUrl, String gid, ServletRequest request, ServletResponse response) {
+//        // ! uvFirstFlag 标记该用户是否为首次访问用户
+//        AtomicBoolean uvFirstFlag = new AtomicBoolean();
+//        // ! cookie 存储用户端
+//        Cookie[] cookies = ((HttpServletRequest) request).getCookies();
+//        // * uv -> 独立访客数
+//        try {
+//            AtomicReference<String> uv = new AtomicReference<>();
+//            // * addResponseCookieTask:
+//            // * 创建一个名为"uv"的Cookie，
+//            // * 并将其添加到HttpServletResponse中发送给客户端。
+//            // * 同时，将uv的值添加到Redis中的集合中，用于统计和管理独立访客数。
+//            // * 如果uv已存在于客户端的Cookie中，则更新uvFirstFlag的值。
+//            Runnable addResponseCookieTask = () -> {
+//                uv.set(UUID.fastUUID().toString());
+//                Cookie uvCookie = new Cookie("uv", uv.get());
+//                uvCookie.setMaxAge(60 * 60 * 24 * 30);
+//                /*
+//                    * Cookie的路径决定了哪些URL可以访问到该Cookie
+//                    * Cookie的路径为当前请求的上下文路径（context path），也就是部署在Web服务器上的应用程序的根路径。
+//                    * setPath方法的作用是允许开发人员自定义Cookie的路径，以便更精确地控制Cookie的访问范围
+//                    * 通过设置不同的路径，可以实现对特定URL或目录的Cookie访问限制。
+//                */
+//                uvCookie.setPath(StrUtil.sub(fullShortUrl, fullShortUrl.indexOf("/"), fullShortUrl.length()));
+//                ((HttpServletResponse) response).addCookie(uvCookie);
+//                // ! 将uvFirstFlag 设置为True 表示该用户为第一次访问该短链接 即可以将用户访问量+1
+//                uvFirstFlag.set(Boolean.TRUE);
+//                // * 从Redis根据当前fullShortUrl 找到该路径下的所有用户
+//                stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, uv.get());
+//            };
+//            // * 根据当前用户的cookie是否为空 进行判断
+//            if (ArrayUtil.isNotEmpty(cookies)) {
+//                // * 如果非空
+//                Arrays.stream(cookies)
+//                        // * 1.找到名为uv 的cookie
+//                        // * 如果filter这一步没找到名为"uv"的cookie
+//                        // * 由于使用了 ifPresentOrElse 方法 那么之后的步骤都会跳过 直接执行addResponseCookieTask
+//                        // * 即为当前第一次访问的用户设置新的cookie 并将结果返回给用户端
+//                        .filter(each -> Objects.equals(each.getName(), "uv"))
+//                        .findFirst()
+//                        .map(Cookie::getValue)
+//                        .ifPresentOrElse(each -> {
+//                            uv.set(each);
+//                            // ! uvAdded的作用是判断 向Redis中加入键值的操作是否成功
+//                            /*
+//                                * stringRedisTemplate.opsForSet().add()
+//                                * 返回值有以下两种情况:
+//                                * 1. 返回值为0: 表示未加入成功即Redis集合中有数据 -> 用户不是第一次访问
+//                                * 2. 返回值 >0: 表示加入成功 Redis集合中本身没有相应的数据 -> 用户是第一次访问
+//                            */
+//                            Long uvAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uv:" + fullShortUrl, each);
+//                            uvFirstFlag.set(uvAdded != null && uvAdded > 0L);
+//                        }, addResponseCookieTask);
+//            } else {
+//                addResponseCookieTask.run();
+//            }
+//
+//            // ! 使用工具类 获取真实IP
+//            String remoteAddr = LinkUtil.getActualIp(((HttpServletRequest) request));
+//            Long uipAdded = stringRedisTemplate.opsForSet().add("short-link:stats:uip:" + fullShortUrl, remoteAddr);
+//            boolean uipFirstFlag = uipAdded != null && uipAdded > 0L;
+//            if (StrUtil.isBlank(gid)) {
+//                LambdaQueryWrapper<ShortLinkGotoDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkGotoDO.class)
+//                        .eq(ShortLinkGotoDO::getFullShortUrl, fullShortUrl);
+//                ShortLinkGotoDO shortLinkGotoDO = shortLinkGotoMapper.selectOne(queryWrapper);
+//                gid = shortLinkGotoDO.getGid();
+//            }
+//            int hour = DateUtil.hour(new Date(), true);
+//            Week week = DateUtil.dayOfWeekEnum(new Date());
+//            int weekValue = week.getIso8601Value();
+//            LinkAccessStatsDO linkAccessStatsDO = LinkAccessStatsDO.builder()
+//                    .pv(1)
+//                    .uv(uvFirstFlag.get() ? 1 : 0)
+//                    .uip(uipFirstFlag ? 1 : 0)
+//                    .hour(hour)
+//                    .weekday(weekValue)
+//                    .fullShortUrl(fullShortUrl)
+//                    .gid(gid)
+//                    .date(new Date())
+//                    .build();
+//
+//
+//            linkAccessStatsMapper.shortLinkStats(linkAccessStatsDO);
+//            Map<String, Object> localeParamMap = new HashMap<>();
+//            localeParamMap.put("key", statsLocaleAmapKey);
+//            localeParamMap.put("ip", remoteAddr);
+//            String localeResultStr = HttpUtil.get(AMAP_REMOTE_URL, localeParamMap);
+//            JSONObject localeResultObj = JSON.parseObject(localeResultStr);
+//            String infoCode = localeResultObj.getString("infocode");
+//            String actualProvince;
+//            String actualCity;
+//            if (StrUtil.isNotBlank(infoCode) && StrUtil.equals(infoCode, "10000")) {
+//                String province = localeResultObj.getString("province");
+//                boolean unknownFlag = StrUtil.equals(province, "[]");
+//                LinkLocaleStatsDO linkLocaleStatsDO = LinkLocaleStatsDO.builder()
+//                        .province(actualProvince = unknownFlag ? "未知" : province)
+//                        .city(actualCity = unknownFlag ? "未知" : localeResultObj.getString("city"))
+//                        .adcode(unknownFlag ? "未知" : localeResultObj.getString("adcode"))
+//                        .cnt(1)
+//                        .fullShortUrl(fullShortUrl)
+//                        .country("中国")
+//                        .gid(gid)
+//                        .date(new Date())
+//                        .build();
+//                linkLocaleStatsMapper.shortLinkLocaleState(linkLocaleStatsDO);
+//
+//            }
+//        } catch (Throwable ex) {
+//            log.error("短链接访问量统计异常", ex);
+//        }
+//    }
 
     /**
      * 白名单 认证功能: 只有在白名单内 的不违法的短链接才能进行创建和跳转
