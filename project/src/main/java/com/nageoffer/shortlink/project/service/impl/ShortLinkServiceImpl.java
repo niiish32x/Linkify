@@ -368,13 +368,20 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     @SneakyThrows
     @Override
     public void restoreUrl(String shortUri, ServletRequest request, ServletResponse response) {
+        // * 获取客户端发起请求的服务器的主机名(域名 或 IP)
         String serverName = request.getServerName();
+        // * 设置要访问的端口
         String serverPort = Optional.of(request.getServerPort())
                 .filter(each -> !Objects.equals(each, 80))
                 .map(String::valueOf)
                 .map(each -> ":" + each)
                 .orElse("");
+        // * 根据已有信息 拼接得到完整短链接
         String fullShortUrl = serverName + serverPort + "/" + shortUri;
+
+        // ! 以下 步骤就是进行判断 是否可以跳转至原始链接
+
+        // * 1. 在Redis是否存在原链接? -> 存在则直接跳转
         String originalLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_SHORT_LINK_KEY, fullShortUrl));
         if (StrUtil.isNotBlank(originalLink)) {
             ShortLinkStatsRecordDTO statsRecord = buildLinkStatsRecordAndSetUser(fullShortUrl, request, response);
@@ -382,19 +389,34 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
             ((HttpServletResponse) response).sendRedirect(originalLink);
             return;
         }
+
+        // * 2. 布隆过滤器中 是否存在原链接?
+        // * 不存在 则代表 该链接就不存在 -> 直接返回空页
+        // * 存在 则那么继续下一步的判断
         boolean contains = shortUriCreateCachePenetrationBloomFilter.contains(fullShortUrl);
         if (!contains) {
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
+
+        // * 3. Redis中是否 已经存在短链接为空 的记录 -> 存在直接返回空页
         String gotoIsNullShortLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl));
         if (StrUtil.isNotBlank(gotoIsNullShortLink)) {
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
+
+        // * 4. 布隆过滤器中存在记录 Redis不存在任何该链接相关的记录 仍无法判断 该链接是否可以直接进行跳转
+        // * 那么只能进一步 依靠数据库查询进行判断
+
+        // * 双重锁判定 因为查询过程 同步进行对于Redis添加操作
+        // * 因此该段记录为同步代码块需要加锁确保共享资源的正确访问
         RLock lock = redissonClient.getLock(String.format(LOCK_GOTO_SHORT_LINK_KEY, fullShortUrl));
         lock.lock();
         try {
+
+            // * GOTO_SHORT_LINK_KEY  GOTO_IS_NULL_SHORT_LINK_KEY 这两步均是双重锁判定的代码
+            // * 多线程竞争资源时 一个线程拿到锁 完成相应信息的修改 释放资源后 其他线程拿到锁都要重复进行一次判定 防止对数据库的多次访问
             originalLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_SHORT_LINK_KEY, fullShortUrl));
             if (StrUtil.isNotBlank(originalLink)) {
                 ShortLinkStatsRecordDTO statsRecord = buildLinkStatsRecordAndSetUser(fullShortUrl, request, response);
@@ -410,22 +432,31 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
+
+
+            // ! 5. 以下代码 才不是双重锁的逻辑范畴 只有第一个竞争到资源的线程 才会执行以下代码 查数据库进行判断
             LambdaQueryWrapper<ShortLinkDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkDO.class)
                     .eq(ShortLinkDO::getGid, shortLinkGotoDO.getGid())
                     .eq(ShortLinkDO::getFullShortUrl, fullShortUrl)
                     .eq(ShortLinkDO::getDelFlag, 0)
                     .eq(ShortLinkDO::getEnableStatus, 0);
             ShortLinkDO shortLinkDO = baseMapper.selectOne(queryWrapper);
+
+            // * 6. 没查到返回空页 并在Redis中记录出该链接是无法跳转的
             if (shortLinkDO == null || (shortLinkDO.getValidDate() != null && shortLinkDO.getValidDate().before(new Date()))) {
                 stringRedisTemplate.opsForValue().set(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl), "-", 30, TimeUnit.MINUTES);
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
+
+            // * 7. 查到了则直接 Redis中添加该链接 的完整链接 下一次直接跳转即可
             stringRedisTemplate.opsForValue().set(
                     String.format(GOTO_SHORT_LINK_KEY, fullShortUrl),
                     shortLinkDO.getOriginUrl(),
                     LinkUtil.getLinkCacheValidTime(shortLinkDO.getValidDate()), TimeUnit.MILLISECONDS
             );
+
+            // * 进行一次跳转后进行相关信息的监控记录
             ShortLinkStatsRecordDTO statsRecord = buildLinkStatsRecordAndSetUser(fullShortUrl, request, response);
             shortLinkStats(fullShortUrl, shortLinkDO.getGid(), statsRecord);
             ((HttpServletResponse) response).sendRedirect(shortLinkDO.getOriginUrl());
