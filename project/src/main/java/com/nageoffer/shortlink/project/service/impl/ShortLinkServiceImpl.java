@@ -79,16 +79,26 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     private final RedissonClient redissonClient;
     private final StringRedisTemplate stringRedisTemplate;
     private final ShortLinkGotoMapper shortLinkGotoMapper;
+
+    // 监控 位置
     private final LinkLocaleStatsMapper linkLocaleStatsMapper;
+    // 监控 日期
     private final LinkAccessStatsMapper linkAccessStatsMapper;
+    // 监控 操作系统
     private final LinkOsStatsMapper linkOsStatsMapper;
+    // 监控 今日统计
     private final LinkStatsTodayMapper linkStatsTodayMapper;
     private final LinkStatsTodayService linkStatsTodayService;
+    // 监控 浏览器
     private final LinkBrowserStatsMapper linkBrowserStatsMapper;
+    // 监控 访问设备
     private final LinkDeviceStatsMapper linkDeviceStatsMapper;
+    // 监控
     private final LinkNetworkStatsMapper linkNetworkStatsMapper;
+
+    // 日志监控
     private final LinkAccessLogsMapper linkAccessLogsMapper;
-    // 白名单功能配置类
+    // 白名单功能
     private final GotoDomainWhiteListConfiguration gotoDomainWhiteListConfiguration;
 
     // 延迟队列
