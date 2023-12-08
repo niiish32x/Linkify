@@ -3,7 +3,6 @@ package com.nageoffer.shortlink.admin.controller;
 import cn.hutool.core.bean.BeanUtil;
 import com.nageoffer.shortlink.admin.common.convention.result.Result;
 import com.nageoffer.shortlink.admin.common.convention.result.Results;
-import com.nageoffer.shortlink.admin.common.enums.UserErrorCodeEnum;
 import com.nageoffer.shortlink.admin.dto.req.UserLoginReqDTO;
 import com.nageoffer.shortlink.admin.dto.req.UserRegisterReqDTO;
 import com.nageoffer.shortlink.admin.dto.req.UserUpdateReqDTO;
@@ -11,21 +10,15 @@ import com.nageoffer.shortlink.admin.dto.resp.UserActualRespDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserLoginRespDTO;
 import com.nageoffer.shortlink.admin.dto.resp.UserRespDTO;
 import com.nageoffer.shortlink.admin.service.UserService;
-import jakarta.servlet.ServletRequest;
-import jakarta.servlet.ServletResponse;
-import jakarta.servlet.http.PushBuilder;
 import lombok.RequiredArgsConstructor;
-import org.redisson.api.RLock;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
 /**
- * 用户管理 控制层
+ * 用户管理控制层’
  * controller 里面不能写 业务代码
  */
-@RestController // 相当于是 restbody 以及 controller 两个接口的一个结合
-@RequiredArgsConstructor // 使用构造器的方式进行注入
+@RestController
+@RequiredArgsConstructor
 public class UserController {
 
     private final UserService userService;
@@ -96,9 +89,4 @@ public class UserController {
         userService.logout(username, token);
         return Results.success();
     }
-
-
-
-
-
 }
