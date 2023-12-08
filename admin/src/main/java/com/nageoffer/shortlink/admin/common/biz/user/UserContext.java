@@ -8,8 +8,10 @@ import java.util.Optional;
  * 用户上下文
  */
 public final class UserContext {
-    // 安全线程 只要在当前线程中去获取都可以获得上下文
-    // TTL 可以实现跨线程传递
+
+    /**
+     * <a href="https://github.com/alibaba/transmittable-thread-local" />
+     */
     private static final ThreadLocal<UserInfoDTO> USER_THREAD_LOCAL = new TransmittableThreadLocal<>();
 
     /**
@@ -50,16 +52,6 @@ public final class UserContext {
         UserInfoDTO userInfoDTO = USER_THREAD_LOCAL.get();
         return Optional.ofNullable(userInfoDTO).map(UserInfoDTO::getRealName).orElse(null);
     }
-
-//    /**
-//     * 获取上下文中用户 Token
-//     *
-//     * @return 用户 Token
-//     */
-//    public static String getToken() {
-//        UserInfoDTO userInfoDTO = USER_THREAD_LOCAL.get();
-//        return Optional.ofNullable(userInfoDTO).map(UserInfoDTO::getToken).orElse(null);
-//    }
 
     /**
      * 清理用户上下文
