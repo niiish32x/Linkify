@@ -8,6 +8,7 @@
     <artifactId>Linkify</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
+
     <modules>
         <module>admin</module>
         <module>project</module>
@@ -16,7 +17,7 @@
 
     <properties>
         <java.version>17</java.version>
-        <spring-boot.version>3.1.2</spring-boot.version>
+        <spring-boot.version>3.0.7</spring-boot.version>
         <spring-cloud.version>2022.0.3</spring-cloud.version>
         <spring-cloud-alibaba.version>2022.0.0.0-RC2</spring-cloud-alibaba.version>
         <mybatis-spring-boot-starter.version>3.0.2</mybatis-spring-boot-starter.version>
@@ -27,13 +28,12 @@
         <dozer-core.version>6.5.2</dozer-core.version>
         <hutool-all.version>5.8.20</hutool-all.version>
         <redisson.version>3.21.3</redisson.version>
-        <jsoup.version>1.15.3</jsoup.version>
         <guava.version>30.0-jre</guava.version>
+        <jsoup.version>1.15.3</jsoup.version>
+        <easyexcel.version>3.1.3</easyexcel.version>
         <spotless-maven-plugin.version>2.22.1</spotless-maven-plugin.version>
     </properties>
 
-<!--    dependencies 定义默认会下载依赖 并把传递到子项目中-->
-<!--    dependencyManagement 不会下载依赖只会去规约版本 只有在子类中引入依赖 才会去下载-->
     <dependencies>
         <dependency>
             <groupId>org.projectlombok</groupId>
